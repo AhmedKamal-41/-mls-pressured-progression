@@ -1,0 +1,3 @@
+metric,league_mean,league_std,n_teams,source_endpoint,note
+xg_per_shot,0.10418474535772736,0.008817172787000152,29,teams/xgoals,"xgoals_for / shots_for per team, MLS 2023. Used as league reference for Module B xg_per_regain z-score."
+rushed_shot_rate,,,0,teams/xgoals,"ASA team-season aggregates do not expose time-since-possession-start, so 'shots in first 8s after turnover / total shots' is not derivable from this endpoint. patience_composite falls back to z(xg_per_regain) only when this row is NaN."

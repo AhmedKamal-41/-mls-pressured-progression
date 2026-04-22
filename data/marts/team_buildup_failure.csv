@@ -1,0 +1,4 @@
+team_name,n_matches,n_chains_qualified,n_failures,failure_rate,ci_lo,ci_hi,note
+Philadelphia Union,0,0,0,,,,no StatsBomb Open Data coverage
+Columbus Crew,0,0,0,,,,no StatsBomb Open Data coverage
+Inter Miami,6,73,25,0.3424657534246575,0.25308544303797476,0.45316051136363633,SUBSTITUTE smoke target — NOT a spec case study

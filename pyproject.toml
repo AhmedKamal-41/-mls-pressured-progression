@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pressured-progression"
+version = "0.1.0"
+description = "MLS build-up collapse and post-regain waste: measurement, European analogs, tactical precedent."
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "pandas",
+    "numpy",
+    "duckdb",
+    "statsbombpy",
+    "requests",
+    "beautifulsoup4",
+    "lxml",
+    "pydantic",
+    "scikit-learn",
+    "xgboost",
+    "shap",
+    "scipy",
+    "matplotlib",
+    "mplsoccer",
+    "plotly",
+    "streamlit",
+    "joblib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+    "pre-commit",
+    "ipykernel",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
