@@ -399,7 +399,7 @@ The takeaway I stand behind: **the value of this project is disciplined descript
 
 ## Author + contact
 
-- **Author:** Ahmed Kali — `ahmedkali841@gmail.com`
+- **Author:** Ahmed Ali — `ahmedkali841@gmail.com`
 - **Written analysis:** [`docs/article_draft.md`](docs/article_draft.md)
 - **One-page summary:** [`docs/executive_summary.pdf`](docs/executive_summary.pdf)
 
