@@ -577,8 +577,8 @@ The committed `data/marts/` means you can run the notebooks, dashboard, and figu
 
 ## 24. Author & license
 
-- **Author:** Ahmed Kali — `ahmedkali841@gmail.com`
-- **Repository:** `github.com/pressured-progression/pressured-progression` *(placeholder until pushed)*
+- **Author:** Ahmed Ali — `ahmedkali841@gmail.com`
+- **Repository:** `https://github.com/AhmedKamal-41/-mls-pressured-progression`
 - **License:** MIT (see `LICENSE`)
 - **Related docs:** `README.md`, `docs/project_spec.md` (the working contract), `docs/data_reality.md` (coverage audit), `docs/article_draft.md` (long-form writeup), `project_info.md` (Phase-3 calibration snapshot), `docs/executive_summary.pdf` (one-pager).
 
