@@ -1,585 +1,406 @@
-# Pressured Progression — Full Project Documentation (A→Z)
+# Pressured Progression
 
-> A complete, self-contained walkthrough of the **Pressured Progression** soccer-analytics project: what it does, the science behind it, the data pipeline, every module, every mart, the models, the tests, the app, the metrics, and every honest limitation. If you read only one file to understand this repository, read this one.
+**Two MLS failure modes — build-up collapse under pressure and post-regain waste — measured on Inter Miami 2023 (Messi's half-season, 6 matches) and benchmarked against Bayer Leverkusen 2023/24 (Alonso's unbeaten season, 34 matches) using StatsBomb Open Data and the American Soccer Analysis API.**
 
----
+**Built with:**
 
-## Table of contents
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
+![pandas](https://img.shields.io/badge/pandas-150458?logo=pandas&logoColor=white)
+![NumPy](https://img.shields.io/badge/NumPy-013243?logo=numpy&logoColor=white)
+![DuckDB](https://img.shields.io/badge/DuckDB-FFF000?logo=duckdb&logoColor=black)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?logo=scikit-learn&logoColor=white)
+![XGBoost](https://img.shields.io/badge/XGBoost-337AB7)
+![SHAP](https://img.shields.io/badge/SHAP-0A9EDC)
+![matplotlib](https://img.shields.io/badge/matplotlib-11557C)
+![Plotly](https://img.shields.io/badge/Plotly-3F4F75?logo=plotly&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)
+![Pydantic](https://img.shields.io/badge/Pydantic-E92063?logo=pydantic&logoColor=white)
+![Ruff](https://img.shields.io/badge/Ruff-D7FF64?logo=ruff&logoColor=black)
+![pytest](https://img.shields.io/badge/pytest-0A9EDC?logo=pytest&logoColor=white)
 
-1. [Executive overview](#1-executive-overview)
-2. [The two failure modes (the thesis)](#2-the-two-failure-modes-the-thesis)
-3. [Headline findings & every metric](#3-headline-findings--every-metric)
-4. [The hard data-reality story (why the scope is what it is)](#4-the-hard-data-reality-story-why-the-scope-is-what-it-is)
-5. [Data sources](#5-data-sources)
-6. [Architecture & directory map](#6-architecture--directory-map)
-7. [The data pipeline, stage by stage](#7-the-data-pipeline-stage-by-stage)
-8. [Core abstractions & schemas](#8-core-abstractions--schemas)
-9. [Module A — build-up failure (labeling + ML)](#9-module-a--build-up-failure-labeling--ml)
-10. [Module B — post-regain waste](#10-module-b--post-regain-waste)
-11. [Module C — the Leverkusen overlay](#11-module-c--the-leverkusen-overlay)
-12. [The machine-learning model in detail](#12-the-machine-learning-model-in-detail)
-13. [Data marts — every output file](#13-data-marts--every-output-file)
-14. [Figures & the executive summary](#14-figures--the-executive-summary)
-15. [The Streamlit dashboard](#15-the-streamlit-dashboard)
-16. [Notebooks](#16-notebooks)
-17. [Testing](#17-testing)
-18. [CI, linting & pre-commit](#18-ci-linting--pre-commit)
-19. [How to reproduce everything](#19-how-to-reproduce-everything)
-20. [Tech stack](#20-tech-stack)
-21. [Constants & thresholds cheat-sheet](#21-constants--thresholds-cheat-sheet)
-22. [Known limitations, tech debt & caveats](#22-known-limitations-tech-debt--caveats)
-23. [Glossary](#23-glossary)
-24. [Author & license](#24-author--license)
+![License](https://img.shields.io/badge/license-MIT-green)
+![CI](https://img.shields.io/badge/CI-ruff%20%2B%20pytest-brightgreen)
 
 ---
 
-## 1. Executive overview
+## Contents
 
-**Pressured Progression** measures two distinct ways a soccer team can fail under pressure, using event-level tracking data:
-
-1. **Build-up collapse** — when a team is pressed deep in its own half and its attempt to play out fails.
-2. **Post-regain waste** — when a team wins the ball back but the recovery never turns into a real attacking threat.
-
-The project puts hard numbers (with uncertainty bands) on both failure modes for one MLS team — **Inter Miami 2023** (Messi's half-season, 6 matches) — and benchmarks them against a European comparator — **Bayer Leverkusen 2023/24** (Xabi Alonso's unbeaten title season, 34 matches). It is built entirely on **open data** (StatsBomb Open Data + the American Soccer Analysis API), so anyone can reproduce it.
-
-It is an **end-to-end technical portfolio project**: raw data ingestion → typed/validated core tables → analysis-ready marts → an interpretable ML model (XGBoost + SHAP) → bootstrap-CI visualizations → a one-page executive PDF → an interactive multi-page Streamlit app → a long-form written article. Every number in every chart traces back to a file in `data/marts/` and a line of code.
-
-**The single most important framing rule:** every reported result is **associational, not causal**. The project never claims a coach, player, or tactic *caused* anything. It describes what co-occurred in the data, with explicit uncertainty and explicit scope limits.
-
-- **Package name:** `pressured-progression` (version `0.1.0`)
-- **Python:** 3.11+
-- **Author:** Ahmed Kali (`ahmedkali841@gmail.com`)
-- **License:** MIT
-
----
-
-## 2. The two failure modes (the thesis)
-
-### Build-up collapse under pressure
-The classic "chasing shadows in your own half" scenario. In code, a build-up sequence is flagged when:
-- possession **starts in the defensive third** (`start_x < 40` on a 0–120 pitch), **and**
-- an **opponent pressing action appears within the first 3 on-ball touches**,
-
-and it terminates via one of four failure endings (turnover, forced long ball, opponent shot within 10s, or a backward reset that leads to a loss). Plainly: *you're trying to climb out while someone leans on you, and you don't manage it.*
-
-### Post-regain waste
-Shifts the clock forward one beat. Instead of the guarded exit from deep, this asks what the team does with a **newly won** ball. A **regain** is a defensive action (interception, tackle, ball recovery, duel, block) that flips possession to the focal team. The subsequent possession chain is measured for: did it reach the final third? How long until a shot? Was the shot rushed and low-quality? Did possession collapse again within 4 actions? *If the ball returns and the next few seconds behave like hurry rather than setup, the window is scored as wasted.*
-
-Both failure modes coexist in real football; **neither implies the other**. Collapse is about buildup under harassment; waste is about the impulse right after flipping the ball.
+- [What this project does](#what-this-project-does)
+- [The two failure modes](#the-two-failure-modes)
+- [Key findings](#key-findings)
+- [How it's measured (methodology)](#how-its-measured-methodology)
+- [The machine-learning model](#the-machine-learning-model)
+- [Every metric, with uncertainty](#every-metric-with-uncertainty)
+- [Visual gallery](#visual-gallery)
+- [Data reality — why the scope is what it is](#data-reality--why-the-scope-is-what-it-is)
+- [Architecture & pipeline](#architecture--pipeline)
+- [Tech stack](#tech-stack)
+- [Data marts (outputs)](#data-marts-outputs)
+- [The Streamlit dashboard](#the-streamlit-dashboard)
+- [Testing](#testing)
+- [Notebooks](#notebooks)
+- [Reproduce](#reproduce)
+- [Data sources](#data-sources)
+- [Scope and limitations](#scope-and-limitations)
+- [Conclusion](#conclusion)
+- [Author + contact](#author--contact)
 
 ---
 
-## 3. Headline findings & every metric
+## What this project does
 
-### The headline
-- **Inter Miami 2023 build-up failure rate:** **34.2%** (95% bootstrap CI **[25.3%, 45.3%]**) across **73** qualifying chains in 6 matches.
-- **Post-regain waste:** **90.4%** of Inter Miami's **353** regains produced **no shot within 15 seconds** (319 of 353). Median time-to-shot when a shot *did* happen: **5.5 s**.
-- **Leverkusen 2023/24 failure rate:** **~21%** (95% CI **[16%, 25%]**) across **394** chains in 34 matches — a cross-team difference of roughly **−14 percentage points** (CI excludes zero).
+**The question.** When an elite attacking team is pressed deep in its own half, how often does its build-up collapse — and once the ball is won back, how often does that regain actually become a threat? These are two distinct failure modes a football team can fall into, and this project puts numbers on both of them for one MLS team and one European comparator that event-level open data can support.
+
+**The approach.** Every on-ball event across 40 matches (6 Inter Miami, 34 Leverkusen) is parsed into possession chains via the StatsBomb schema. Build-up sequences are labeled failure/not-failure by explicit rules; regains are detected and their aftermath measured; an XGBoost classifier with SHAP attribution probes whether collapse-shaped possessions carry a measurable geometric signature. Every team-season rate carries a **match-resampled 95% bootstrap confidence interval**, and every claim is **associational, not causal**.
+
+**What it is as a deliverable.** An end-to-end, reproducible pipeline built entirely on **open data**: raw ingestion → typed/validated core tables → analysis-ready marts → interpretable ML → bootstrap-CI figures → a one-page executive PDF → an interactive multi-page Streamlit app → a long-form written article. Every number in every chart traces back to a file in `data/marts/` and a line of code.
+
+- **Package:** `pressured-progression` (v0.1.0) · **Python:** 3.11+ · **License:** MIT
+
+---
+
+## The two failure modes
+
+**1 — Build-up collapse under pressure.** The "chasing shadows in your own half" scenario. A build-up sequence is flagged when possession **starts in the defensive third** (`start_x < 40` on a 0–120 pitch) **and** an **opponent pressing action appears within the first 3 touches**, then terminates via one of four failure endings (turnover in own half, forced long ball, opponent shot within 10s, or a backward reset that leads to a loss). Plainly: you're trying to climb out while someone leans on you, and you don't manage it.
+
+**2 — Post-regain waste.** Shifts the clock forward one beat: what does the team do with a **newly won** ball? A **regain** is a defensive action (interception, tackle, ball recovery, duel, block) that flips possession to the focal team. The subsequent chain is measured for final-third entry, time-to-shot, xG, rushed-shot rate, and quick re-loss. If the ball returns and the next few seconds behave like hurry rather than setup, the window is scored as wasted.
+
+Both modes coexist in real football; **neither implies the other**. Collapse is about buildup under harassment; waste is about the impulse right after flipping the ball.
+
+---
+
+## Key findings
+
+- **Inter Miami 2023 build-up failure rate:** **34%** [95% CI 25–45%] across **73** qualifying chains in 6 matches.
+- **Post-regain waste:** **90%** of Inter Miami's **353** regains produced no shot within 15 seconds (319 of 353); median time-to-shot when shots happened was **5.5 s**.
+- **Leverkusen 2023/24 failure rate:** **21%** [95% CI 16–25%] across **394** chains in 34 matches — **14 percentage points lower** than Inter Miami (CI excludes zero).
 - **Leverkusen final-third entry after regain:** **81%** vs Inter Miami **67%** — a **+14 pp** difference (CI excludes zero).
-- **Model utility is modest at small n.** XGBoost CV ROC-AUC **0.54 ± 0.08** on 73 chains — a **logistic-regression baseline (0.586) actually beats it**. Reported honestly, with no overstatement.
+- Leverkusen is materially better on **4 of 7** cross-team metrics at 95% confidence (failure rate, final-third entry, xG per regain, patience composite). The other three (time-to-shot, rushed-shot rate, quick-loss) are **not separable from noise** at this sample size.
+- **Model utility is modest at small n.** XGBoost CV ROC-AUC **0.54 ± 0.08** on 73 chains — a logistic-regression baseline (0.585) actually beats it. Reported honestly, with no overstatement.
 
-### Module B — Inter Miami's six post-regain metrics (with 95% bootstrap CIs)
-Source: `data/marts/team_post_regain.csv`, all over **n = 353** regains.
+### Sample visual
 
-| Metric | Point estimate | 95% CI |
+Cross-team difference forest plot (Leverkusen 23/24 − Inter Miami 2023, 95% bootstrap CI per metric). Cyan markers = CI excludes zero; gray = CI overlaps zero.
+
+![Leverkusen − Inter Miami forest plot](docs/figures/leverkusen_diff_forest.png)
+
+---
+
+## How it's measured (methodology)
+
+The analysis is organized into three modules on top of shared sequence-building primitives.
+
+### Shared primitives
+- **Possession chains** (`sequences/possession_chain.py`) — consecutive on-ball events owned by one team within a StatsBomb possession block, keyed `(match_id, possession_id)`. Each chain carries start/end coordinates, `action_count`, `under_pressure_count`, an `end_type` (goal/shot/loss/clearance/foul_won/half_end), and the first receiver.
+- **Regains** (`sequences/regain.py`) — a defensive action `{Interception, Ball Recovery, Tackle, Duel, Block}` by the focal team that flips possession to it. Pitch zones by x: `<40` defensive, `40–80` middle, `≥80` attacking. The next focal shot is searched within a **15-second window**.
+- **Column contracts** (`core/schemas.py`) — Pydantic schemas (`EventRow`, `PossessionChain`, `RegainEvent`, `BuildUpFailureLabel`) with a `validate_columns()` guard called at every stage boundary.
+
+### Module A — build-up failure (labeling + interpretable ML)
+A chain **qualifies** if it originates in the defensive third (`start_x < 40`) and faces opponent pressure within the first 3 actions. Qualifying chains get the **first matching** failure type, in priority order:
+1. `turnover_own_half` — turnover terminal in own half (`x < 60`).
+2. `forced_long_ball` — a pass longer than **40 m** near the end of the chain.
+3. `opp_shot_within_10s` — opponent shoots within 10 s of the chain ending.
+4. `backward_reset_turnover` — a backward pass (`pass_end_x < location_x − 5`) followed by a loss.
+5. `none` — not a failure.
+
+Each qualifying chain is turned into a **17-feature** vector (`features/buildup_features.py`): defensive-third pressure density, first-receiver pressure (binary + seconds), recent pass reach, opponent press height (in the opponent's attacking frame), first-receiver passing-network betweenness, plus one-hot score-differential (`sd_*`) and minute (`min_*`) buckets. *(The planned `support_density_ff` feature was dropped — it needs 360 freeze-frame data that 404s; see below.)*
+
+### Module B — post-regain waste (`features/post_regain.py`)
+Each regain's subsequent chain is scored for `reached_final_third` (any `x ≥ 80`), `lost_within_4_actions`, and `chain_end_type`. Six team-season metrics are aggregated with **match-resampled bootstrap CIs** (`n_boot = 1000`, `seed = 20260421`): xG per regain, median time-to-shot, rushed-shot rate (xG < 0.05 and < 8 s), final-third entry rate, quick-loss rate, and a **patience composite** = `z(xg_per_regain) − z(rushed_shot_rate)` against an ASA league baseline.
+
+### Module C — the Leverkusen overlay (`analysis/leverkusen_overlay.py`)
+Computes Leverkusen 23/24's raw failure rate + the six Module B metrics and overlays them side-by-side against Inter Miami 2023, with **independently match-resampled difference CIs** and a `ci_excludes_zero` flag per metric. *(The originally planned pre/post-vs-2022/23 comparison was dropped — Bundesliga 2022/23 is absent from Open Data.)*
+
+---
+
+## The machine-learning model
+
+`models/buildup_failure_xgb.py` trains the Module A classifier with methodology chosen for a small, leakage-prone sample:
+
+- **Cross-validation:** `GroupKFold(5)` grouped by `match_id` so entire matches stay together across folds.
+- **Baseline:** balanced logistic regression (StandardScaler → LogReg).
+- **Model:** XGBoost via `RandomizedSearchCV` (`n_iter=30`, `scoring="roc_auc"`) over depth, learning rate, estimators, min-child-weight, subsample, and colsample; `scale_pos_weight` handles class imbalance.
+- **Calibration:** isotonic `CalibratedClassifierCV`; a raw XGB is also refit for SHAP.
+- **Small-n leakage check:** requires `holdout_AUC > CV_mean − threshold`, where the threshold **scales with n** (0.10 if n<200, else 0.05) — because at n=73 any held-out fold can swing ±0.08 by chance.
+- **Interpretation:** `shap.TreeExplainer` on the raw XGB → global mean-|SHAP| rankings.
+
+**What the model honestly showed:** tuned XGBoost (0.538 AUC) **underperforms** the LogReg baseline (0.585) on discrimination and wins only on Brier score; calibration zigzags across the diagonal. Gain importance favors game-state buckets while mean |SHAP| favors pressure geometry (`first_receiver_betweenness`, `defthird_pressure_density`, `opp_press_height`) — an expected divergence. The model is presented as an **illustrative, small-n** exercise, not a deployable scout.
+
+---
+
+## Every metric, with uncertainty
+
+**Inter Miami 2023 — six post-regain metrics** (`data/marts/team_post_regain.csv`, n = 353 regains):
+
+| Metric | Estimate | 95% CI |
 |---|---:|---|
 | xG per regain | 0.00827 | [0.0044, 0.0135] |
-| Time-to-shot (median seconds) | 5.5 | [4.0, 9.0] |
+| Time-to-shot (median s) | 5.5 | [4.0, 9.0] |
 | Rushed-shot rate | 0.353 | [0.136, 0.485] |
 | Final-third entry rate | 0.669 | [0.568, 0.772] |
 | Loss-within-4-actions rate | 0.0113 | [0.0027, 0.024] |
-| Patience composite | −10.878 | [−11.32, −10.28] |
+| Patience composite* | 10.878 below reference | [10.28, 11.32] below |
 
-### Module C — Leverkusen 23/24 vs Inter Miami 2023 overlay
-Source: `data/marts/leverkusen_overlay.csv`. Difference = **Leverkusen − Miami**.
+<sub>*Patience composite is a relative z-index; "below reference" means below the ASA MLS 2023 league mean (z = 0). A higher value (closer to zero) = more patient, higher-quality post-regain attacking.</sub>
 
-| Metric | Leverkusen | Miami | Difference | 95% diff CI | Separable? |
-|---|---:|---:|---:|---|:---:|
-| Raw build-up failure rate | 0.206 | 0.342 | −0.137 | [−0.262, −0.035] | ✅ |
-| xG per regain | 0.0178 | 0.00827 | +0.00958 | [+0.0032, +0.0159] | ✅ |
-| Time-to-shot (median s) | 5.0 | 5.5 | −0.50 | [−5.01, +1.5] | ❌ |
-| Rushed-shot rate | 0.278 | 0.353 | −0.0748 | [−0.211, +0.123] | ❌ |
-| Final-third entry rate | 0.808 | 0.669 | +0.140 | [+0.020, +0.250] | ✅ |
-| Loss-within-4-actions rate | 0.0131 | 0.0113 | +0.0018 | [−0.0116, +0.0128] | ❌ |
-| Patience composite | −9.79 | −10.88 | +1.09 | [+0.365, +1.80] | ✅ |
+**Leverkusen 23/24 vs Inter Miami 2023 overlay** (`data/marts/leverkusen_overlay.csv`), read as *how Leverkusen compares to Inter Miami*:
 
-**"Separable"** means the 95% CI for the difference excludes zero (column `ci_excludes_zero`). Leverkusen is materially better on **4 of 7** metrics at 95% confidence; the other 3 are not distinguishable from noise at this sample size.
+| Metric | Leverkusen | Miami | Leverkusen vs Miami | Separable at 95%? |
+|---|---:|---:|---|:---:|
+| Raw build-up failure rate | 0.206 | 0.342 | **0.137 lower** — CI [0.035, 0.262] | ✅ |
+| xG per regain | 0.0178 | 0.00827 | **0.0096 higher** — CI [0.0032, 0.0159] | ✅ |
+| Final-third entry rate | 0.808 | 0.669 | **0.140 higher** — CI [0.020, 0.250] | ✅ |
+| Patience composite | 9.79 below ref | 10.88 below ref | **1.09 higher** — CI [0.37, 1.80] | ✅ |
+| Time-to-shot (median s) | 5.0 | 5.5 | ~0.5 shorter — within noise | ❌ |
+| Rushed-shot rate | 0.278 | 0.353 | ~0.075 lower — within noise | ❌ |
+| Loss-within-4-actions rate | 0.0131 | 0.0113 | ~level — within noise | ❌ |
 
-### The Regain Sankey accounting (Inter Miami, 353 regains, 15-second window)
-- **34** regains → a modeled shot within 15 s
-- **201** → reached the final third without an immediate shot
-- **4** → "lost within 4 actions"
-- **114** → "other" (still in the accounting, no moral judgment implied)
+Leverkusen comes out ahead on the four metrics where the sample can actually tell the two teams apart (top four rows: a lower build-up failure rate, more xG per regain, more final-third entries after a regain, and a higher patience score). On the other three, the gap sits inside the bootstrap bands, so they read as **level within noise**. "Separable at 95%" means the confidence interval for the gap stays entirely on one side.
 
 ---
 
-## 4. The hard data-reality story (why the scope is what it is)
+## Visual gallery
 
-This is the most important honesty section, documented fully in `docs/data_reality.md`. The project's *original* design does not survive contact with open data, and the repo is transparent about that.
+Every figure below is generated from the committed marts by the pipeline scripts in `src/pressured_progression/analysis/` and `features/post_regain.py`. Full-resolution versions live in [`docs/figures/`](docs/figures/).
 
-**What broke:**
-1. **The two named MLS case-study teams don't exist in the data.** The spec named **Philadelphia Union 2023** (primary failure case) and **Columbus Crew 2023** (positive control). **Neither team has a single event-level match in StatsBomb Open Data.** The entire MLS 2023 Open Data corpus is **6 Inter Miami fixtures** (the Messi release, Aug–Oct 2023). There is no "MLS-wide distribution" to rank teams within.
-2. **3 of 4 European analog candidates are absent.** Brighton (men's) never appears (only the women's FAWSL team is in Open Data); Bologna only has Serie A 2015/16; Girona only La Liga 2017/18–2018/19. **Only Bayer Leverkusen 2023/24** has full 34-match coverage with 360 data.
-3. **The planned Leverkusen pre/post comparison died.** Bundesliga **2022/23 is entirely absent** from Open Data (only 2015/16 and 2023/24 exist). So "what changed under Alonso" cannot be a code module — it becomes article prose only. Module C was reframed from a pre/post design into a **side-by-side overlay** (Leverkusen 23/24 vs Inter Miami 2023).
-4. **360 freeze-frame data 404s.** All 6 MLS 2023 matches advertise `match_status_360 = "available"` in the catalog, but the underlying 360 JSON files return **HTTP 404** on the StatsBomb GitHub repo. Consequence: the planned `support_density_ff` feature (which needs freeze-frames) is **all-null** and was **dropped** from the model.
-5. **FBref is blocked.** Both target pages returned **HTTP 403** behind a Cloudflare "Just a moment…" challenge — on the *first* request, before any rate-limit signal. This killed the planned 8-dimension "style vector" for analog matching. The similarity-matching engine was never built (`src/pressured_progression/matching/` is an empty package).
+### Module A — build-up failure under pressure
 
-**How the project responded:** it narrowed to a **data-honest** claim — *"here is how one high-profile MLS team handled pressure, measured against one European comparator, with league context from season aggregates"* — rather than overreaching on data that doesn't exist. This reframing is itself a headline result of the project.
+| Build-up failure rate (with 95% CI) | Top features by mean \|SHAP\| |
+|:---:|:---:|
+| ![Build-up failure rate](docs/figures/case_study_03_buildup_failure_rate.png) | ![Top SHAP features](docs/figures/case_study_04_top_shap.png) |
+| Inter Miami fails **34%** [25–45%] of pressured build-ups. | Pressure geometry (`betweenness`, `pressure_density`, `press_height`) dominates. |
+
+| SHAP global summary (beeswarm) | Model calibration |
+|:---:|:---:|
+| ![SHAP summary](docs/figures/shap_summary.png) | ![Calibration curve](docs/figures/calibration_curve.png) |
+| Per-feature push above/below baseline failure risk. | Reliability zigzags — honest evidence of near-chance discrimination at n=73. |
+
+### Module B — post-regain waste (Inter Miami 2023)
+
+| Six post-regain metrics (bootstrap CIs) | Regain outcome Sankey |
+|:---:|:---:|
+| ![Post-regain metrics](docs/figures/post_regain_metrics_bar.png) | ![Regain Sankey](docs/figures/post_regain_sankey.png) |
+| Point estimates with match-resampled 95% bands. | Where 353 regains actually go inside the 15s window. |
+
+| Time-to-shot histogram | Regain zones heatmap |
+|:---:|:---:|
+| ![Time to shot](docs/figures/time_to_shot_hist.png) | ![Regain zones](docs/figures/regain_zones_heatmap.png) |
+| Median **5.5 s** when a shot happens at all (90% never do). | Where on the pitch Miami wins the ball back. |
+
+### Module C — Leverkusen 23/24 vs Inter Miami 2023
+
+| Side-by-side overlay | Difference forest (Leverkusen − Miami) |
+|:---:|:---:|
+| ![Leverkusen overlay bars](docs/figures/leverkusen_overlay_bar.png) | ![Leverkusen − Miami forest](docs/figures/leverkusen_diff_forest.png) |
+| Seven metrics, both teams, with CIs. | Cyan = CI excludes zero (4 of 7 separable). |
+
+**Regain-location heatmaps — both teams side by side**
+
+![Leverkusen vs Miami regain heatmaps](docs/figures/leverkusen_vs_miami_regain_heatmaps.png)
+
+> A one-page, recruiter-facing synthesis of all of the above is in [`docs/executive_summary.pdf`](docs/executive_summary.pdf).
 
 ---
 
-## 5. Data sources
+## Data reality — why the scope is what it is
 
-| Source | Role | Access | Status |
-|---|---|---|---|
-| **StatsBomb Open Data** | Event-level data: MLS 2023 (Inter Miami), Bundesliga 2023/24 (Leverkusen) | `statsbombpy` | ✅ Used |
-| **American Soccer Analysis (ASA) v1 API** | MLS 2020–present team-season aggregates (league context) | REST (`https://app.americansocceranalysis.com/api/v1/`) | ✅ Used |
-| **FBref** | Intended style-vector features | HTTP + BeautifulSoup | ❌ Cloudflare-blocked (403) |
+The most important honesty in this project (full audit in [`docs/data_reality.md`](docs/data_reality.md)): the *original* design does not survive contact with open data, and the audit itself became a headline finding.
 
-**ASA endpoints used** (all returned HTTP 200):
-- `teams/xgoals` — 31 teams; xG for/against, shots, goals, points, xpoints.
-- `teams/goals-added` — 31 teams; goals-added by action type (Dribbling, Fouling, Interrupting, Passing, Receiving, Shooting).
-- `teams/xpass` — 31 teams; pass completion vs expected, average vertical distance.
+1. **The two named MLS case teams don't exist in the data.** The original plan named Philadelphia Union (failure case) and Columbus Crew (positive control). **Neither has a single event-level match in StatsBomb Open Data** — the entire MLS 2023 corpus is **6 Inter Miami fixtures** (the Messi release). There is no MLS-wide distribution to rank teams within.
+2. **3 of 4 European analog candidates are absent.** Brighton (men's), Bologna, and Girona lack the requested seasons in Open Data. **Only Bayer Leverkusen 2023/24** has full 34-match coverage with 360.
+3. **The planned Leverkusen pre/post died.** Bundesliga 2022/23 is entirely absent from Open Data, so "what changed under Alonso" is article prose, not a code module. Module C became a side-by-side overlay instead.
+4. **360 freeze-frame data 404s.** All 6 MLS matches advertise `match_status_360 = "available"`, but the JSON files return HTTP 404 — so `support_density_ff` is all-null and was dropped from the model.
+5. **FBref is blocked.** Both target pages return HTTP 403 behind a Cloudflare challenge, which killed the planned 8-dimension "style vector" and the analog-matching engine (never built).
 
-**StatsBomb competition/season IDs used in code:**
-- MLS 2023: `competition_id = 44`, `season_id = 107`
-- Bundesliga 2023/24: `competition_id = 9`, `season_id = 281`
+The project's response was to narrow to a **data-honest** claim rather than overreach on data that doesn't exist.
 
 ---
 
-## 6. Architecture & directory map
+## Architecture & pipeline
 
-```
-pressured-progression/
-├── src/pressured_progression/     # the installable Python package
-│   ├── core/          schemas.py            # Pydantic column contracts + validate_columns()
-│   ├── ingest/        asa.py                # ASA API audit → data/raw/asa/
-│   │                  asa_league_baseline.py# MLS 2023 xG/shot baseline → marts
-│   │                  events_adapter.py     # statsbombpy wide frame → EventRow shape
-│   │                  fbref.py              # FBref scraper (blocked)
-│   │                  leverkusen_ingest.py  # Leverkusen 23/24 events → parquet
-│   │                  statsbomb.py          # Open Data catalog audit
-│   ├── sequences/     possession_chain.py   # events → possession chains
-│   │                  regain.py             # events → regain events
-│   ├── features/      buildup_features.py   # per-chain feature vectors (Module A X)
-│   │                  post_regain.py        # Module B metrics + figures
-│   ├── labeling/      buildup_failure.py    # binary failure label + failure_type
-│   ├── models/        buildup_failure_xgb.py# XGBoost + LogReg baseline + calibration
-│   ├── matching/      (empty — analog matcher never built; see §4)
-│   ├── viz/           (empty package)
-│   └── analysis/      smoke_buildup_failure.py     # Module A smoke run on MLS 2023
-│                      run_buildup_pipeline.py      # full Module A driver
-│                      leverkusen_overlay.py        # Module C
-│                      build_case_study_figures.py  # 7 case-study PNGs
-│                      build_executive_summary.py   # one-page PDF
-├── app/               streamlit_app.py      # 3-page dashboard entry point
-│   ├── components/    style.py, asa_refresh.py, inter_miami_plots.py, leverkusen_plots.py
-│   └── pages/         1_inter_miami.py, 2_leverkusen.py, 3_league_context.py
-├── data/
-│   ├── raw/           # immutable source data (gitignored)
-│   ├── core/          # typed/validated intermediate tables (gitignored)
-│   └── marts/         # analysis-ready outputs (committed if small) + models/ + cache/
-├── docs/              project_spec.md, data_reality.md, article_draft.md,
-│                      executive_summary.pdf, figures/*.png, outreach/*.md
-├── notebooks/         03–07 *.ipynb (read-only render notebooks)
-├── tests/             8 test files + fixtures
-├── .github/workflows/ ci.yml
-├── pyproject.toml, README.md, project_info.md, LICENSE
-├── .pre-commit-config.yaml, .gitignore
-```
-
-**Pipeline data flow (spec §10):**
 ```
 data/raw  →  data/core (typed, validated)  →  data/marts (analysis-ready)
 ```
 
-Every module resolves the repo root with `ROOT = Path(__file__).resolve().parents[N]` (N=3 for package modules, N=2 for app files) so paths work regardless of the working directory.
-
----
-
-## 7. The data pipeline, stage by stage
-
-The full pipeline is a sequence of Python module invocations (each is runnable with `python -m ...`). In order:
-
-1. **`ingest.statsbomb`** — audits the Open Data catalog, counts matches per competition-season, writes `data/raw/statsbomb_catalog.csv`. (This is the audit that discovered the coverage gaps.)
-2. **`ingest.asa`** — probes the 3 ASA endpoints, dumps raw JSON + a schema index to `data/raw/asa/`.
-3. **`ingest.asa_league_baseline`** — pulls MLS 2023 team xGoals, computes the league `xg_per_shot` mean/std → `data/marts/asa_mls_2023_baseline.csv` (the reference line for Module B's patience composite).
-4. **`ingest.leverkusen_ingest`** — fetches Leverkusen 23/24 matches + events, writes per-match parquet + a manifest under `data/raw/statsbomb/leverkusen_2324/`.
-5. **`analysis.smoke_buildup_failure`** — runs the Module A labeler on MLS 2023 (Inter Miami as the substrate; Philly/Columbus documented as zero-coverage), writes per-match label parquets to `data/core/buildup_labels/`.
-6. **`analysis.run_buildup_pipeline`** — the full Module A driver: builds features → trains the model → computes SHAP → persists everything (features parquet, model joblibs, importance/SHAP/CV/OOF marts, calibration figure).
-7. **`features.post_regain`** — Module B: detects regains, enriches them, aggregates the six metrics with bootstrap CIs → `regain_events.parquet`, `team_post_regain.csv`, figures.
-8. **`analysis.leverkusen_overlay`** — Module C: computes Leverkusen's metrics and overlays them against Inter Miami's → Leverkusen parquets, `leverkusen_overlay.csv`, overlay figures.
-9. **`analysis.build_case_study_figures`** — renders the 7 `case_study_*.png` figures from the marts.
-10. **`analysis.build_executive_summary`** — assembles the one-page `docs/executive_summary.pdf`.
-
-Then: `streamlit run app/streamlit_app.py` for the dashboard, and `pytest` for the tests.
-
-**Key engineering choices:**
-- **DuckDB `read_parquet`** unions per-match parquet files for full-season aggregation, keeping large event scans off pandas memory (spec §11: "event-level analytics ride on DuckDB, not pandas").
-- **Idempotent ingestion** — event fetchers skip matches whose parquet already exists.
-- **Bootstrap seed `20260421`** and **match-level resampling** are used consistently across every CI computation for reproducibility.
-
----
-
-## 8. Core abstractions & schemas
-
-Defined in `src/pressured_progression/core/schemas.py` as Pydantic `BaseModel` **column contracts** (they describe DataFrame shapes, not row-by-row validation). The helper `validate_columns(df, schema)` raises `ValueError` listing any missing columns; extra columns are allowed. It is called at every stage boundary.
-
-- **`EventRow`** — the canonical event shape: `match_id, period, minute, second, team_id, player_id, event_type, location_x, location_y, outcome, under_pressure, pass_end_x, pass_end_y, possession_id`. `extra="allow"` so downstream extras (`pass_recipient_id`, `shot_statsbomb_xg`, `pass_length`, `duration`, `possession_team_id`) pass through.
-- **`PossessionChain`** — one row per `(match_id, possession_id)` owned by one team: `start_x/y, end_x/y, end_type, action_count, under_pressure_count, terminal_outcome, first_receiver_id`.
-- **`RegainEvent`** — `time_seconds, regain_x/y, regain_zone, regaining_team_id, subsequent_possession_id, next_shot_seconds, next_shot_xg`.
-- **`FailureType`** (StrEnum) — `turnover_own_half`, `forced_long_ball`, `opp_shot_within_10s`, `backward_reset_turnover`, `none`.
-- **`BuildUpFailureLabel`** — `match_id, possession_id, is_failure, failure_type`.
-
-### Possession chains (`sequences/possession_chain.py`)
-`build_possession_chains(events)` sorts events by `(match_id, period, minute, second)`, derives the "possession team" as the team of the **first event** in each possession block (to drop interleaved opponent defensive actions), keeps only owner rows, and emits one chain row per block. `end_type` is classified by the terminal event: `goal`/`shot`/`loss`/`clearance`/`foul_won`/`half_end`/etc. Absolute time is `(period-1)*45*60 + minute*60 + second`.
-
-### Regains (`sequences/regain.py`)
-`detect_regains(events, focal_team_id)`. A regain fires when an event is a **defensive action** (`{Interception, Ball Recovery, Tackle, Duel, Block}`), is by the focal team, and the focal team owns the resulting possession. Pitch zones by x: **`<40` defensive**, **`40–80` middle**, **`≥80` attacking**. The next focal shot is searched within **`SHOT_WINDOW_S = 15.0` seconds**; its xG comes from `shot_statsbomb_xg`.
-
----
-
-## 9. Module A — build-up failure (labeling + ML)
-
-### Labeling (`labeling/buildup_failure.py`)
-A chain **qualifies** if it starts in the defensive third (`start_x < 40`) **and** any of its first 3 events is `under_pressure`. Qualifying chains are assigned the **first matching** failure type, in this priority order (`we_lost` = the next possession block is owned by a different team):
-
-1. **`turnover_own_half`** — `we_lost` and terminal event is a turnover and terminal `location_x < 60`.
-2. **`forced_long_ball`** — `we_lost` and some pass with length **> 40 m** with ≤2 actions remaining after it.
-3. **`opp_shot_within_10s`** — `we_lost` and the opponent shoots within **10 s** of the chain ending.
-4. **`backward_reset_turnover`** — `we_lost` and a pass moving backward by **> 5** x-units (`pass_end_x < location_x − 5`) with ≤5 actions remaining.
-5. Else **`none`** (not a failure).
-
-Thresholds: `LONG_BALL_METERS = 40.0`, `BACKWARD_X_DELTA = 5.0`, `TURNOVER_X_MAX = 60.0`, `OPP_SHOT_WINDOW_S = 10.0`.
-
-### Features (`features/buildup_features.py`)
-One feature row per qualifying chain. The model's `X` (`FEATURE_COLUMNS`, 17 columns total):
-
-**Continuous / engineered (6):**
-- `defthird_pressure_density` — opponent `Pressure` events in `[t0, t0+30s]` divided by own chain-event count in the window.
-- `first_receiver_pressure_binary` — was the first receiver pressed within 2 s of receiving? (`FR_PRESSURE_BINARY_S = 2.0`)
-- `first_receiver_pressure_seconds` — seconds to that pressure (searched up to 5 s ahead).
-- `recent_pass_reach` — mean Euclidean length of the focal team's **last 3 passes** before the chain (0.0 if fewer than 3).
-- `opp_press_height` — mean `location_x` of opponent defensive events in `[t0−30s, t0)`, reported in the **opponent's own attacking frame** (higher = pressing closer to our goal). *This coordinate convention is a documented "hard rule."*
-- `first_receiver_betweenness` — weighted betweenness centrality of the first receiver in a per-match passing-network `DiGraph` (built with `networkx`).
-
-**One-hot game-state (11):**
-- `sd_*` (5): score-differential buckets — `minus2_or_worse, minus1, zero, plus1, plus2_or_better`. Score crediting counts both `Shot`+`outcome=="Goal"` **and** `Own Goal For`.
-- `min_*` (6): minute buckets — `0_15, 16_30, 31_45plus, 46_60, 61_75, 76_90plus`.
-
-**Dropped:** `support_density_ff` — required 360 freeze-frame data that 404s (see §4). It is explicitly excluded from `FEATURE_COLUMNS`.
-
-Output: `data/marts/buildup_features.parquet` (shape **73 × 22**: keys + 17 features + `is_failure` + `team_name`).
-
-### Driver (`analysis/run_buildup_pipeline.py`)
-Reads events + labels via DuckDB, rebuilds chains, joins the `team_id`, filters to qualifying chains, extracts features, joins the label, trains the model, computes SHAP, and persists everything. Teams with no coverage (Philly, Columbus) get a NaN row noted `"no StatsBomb Open Data coverage"`. **Halts (exit 3) if fewer than 3 unique matches exist.**
-
----
-
-## 10. Module B — post-regain waste
-
-`features/post_regain.py`. After detecting regains, each is enriched by inspecting the subsequent possession chain:
-- `reached_final_third` — any event with `location_x ≥ 80` (`FINAL_THIRD_X = 80.0`).
-- `lost_within_4_actions` — chain length ≤ 4 **and** terminal is a turnover (`LOST_WITHIN_ACTIONS = 4`).
-- `chain_end_type` — `{shot, loss, foul_won, halt, other}`.
-
-**The six metrics (`_apply_all`):**
-1. `xg_per_regain` = Σ next-shot xG (NaN→0) / n_regains.
-2. `time_to_shot_median` = median of non-null next-shot seconds.
-3. `rushed_shot_rate` = among regains that produced a shot, fraction with xG **< 0.05** **and** time **< 8 s** (`RUSHED_XG_MAX = 0.05`, `RUSHED_SECONDS_MAX = 8.0`).
-4. `regain_to_final_third_rate` = mean of `reached_final_third`.
-5. `regain_to_loss_rate` = mean of `lost_within_4_actions`.
-6. `patience_composite` = `z(xg_per_regain) − z(rushed_shot_rate)`, using the ASA baseline means/stds; **degrades to just `z(xg_per_regain)`** when the rushed-shot baseline is NaN (which it is, because ASA season aggregates lack time-since-possession data).
-
-**Uncertainty:** `_bootstrap_metric` resamples **match IDs with replacement** (`n_boot = 1000`, `ci = 0.95`, `seed = 20260421`), computing percentile CIs. `aggregate_team_season` returns one row per metric with `point_estimate, ci_lo, ci_hi, n_regains`.
-
-**Figures produced:** metrics bar, time-to-shot histogram, regain hexbin heatmap (pitch lines at x=40/80), and a Plotly Sankey (regain → {shot ≤15s, final-third no shot, lost ≤4, other}). A `log_sanity` step warns if `n_regains < 300` and reports the no-shot percentage.
-
-**Outputs:** `data/marts/regain_events.parquet` (353 × 12), `data/marts/team_post_regain.csv` (6 metrics).
-
----
-
-## 11. Module C — the Leverkusen overlay
-
-`analysis/leverkusen_overlay.py`. Computes Leverkusen 23/24's raw build-up failure rate + the six Module B metrics, then overlays them against Inter Miami's persisted aggregates. (The pre/post-vs-2022/23 design was dropped — 22/23 is absent from Open Data.)
-
-Flow:
-- `build_leverkusen_marts()` — loads events via DuckDB, determines the focal team as the one appearing in **all** matches, builds chains → filters to focal → labels failures → computes regain events. Writes `leverkusen_2324_chains.parquet` (2863 × 12), `leverkusen_2324_regains.parquet` (2131 × 12), `leverkusen_2324_buildup_labels.parquet` (394 × 4).
-- `_diff_bootstrap` — **independently** resamples each team's matches (`n_boot = 1000`, seed `20260421`), computing `leverkusen_metric − miami_metric` per iteration, and returns 2.5/97.5 percentile difference CIs.
-- `_assemble_overlay` — one row per metric with both teams' mean+CI, the difference, difference CI, `ci_excludes_zero` flag, and the associational caveat string.
-
-**Outputs:** `data/marts/leverkusen_overlay.csv` (7 metrics) plus figures `leverkusen_overlay_bar.png`, `leverkusen_diff_forest.png`, `leverkusen_vs_miami_regain_heatmaps.png`.
-
----
-
-## 12. The machine-learning model in detail
-
-`models/buildup_failure_xgb.py` — an **interpretable ML** pipeline built to stress-test whether collapse-shaped possessions carry a measurable geometric signature beyond the rule book.
-
-**Cross-validation:** `GroupKFold(5)` grouped by `match_id` so entire matches stay together across folds (prevents leakage from correlated score trajectories within one game).
-
-**Baseline:** `Pipeline(StandardScaler(with_mean=False) → LogisticRegression(class_weight="balanced", max_iter=1000, solver="liblinear"))`.
-
-**XGBoost:** `RandomizedSearchCV` (`scoring="roc_auc"`, `n_iter=30`) over:
-- `max_depth ∈ {3,4,5,6,7}`
-- `learning_rate ~ loguniform(0.03, 0.2)`
-- `n_estimators ∈ {200,400,600,800}`
-- `min_child_weight ∈ {1,3,5,10}`
-- `subsample ~ uniform(0.7, 1.0)`
-- `colsample_bytree ~ uniform(0.7, 1.0)`
-
-Base config: `objective="binary:logistic"`, `tree_method="hist"`, `eval_metric="logloss"`, `scale_pos_weight = n_neg/n_pos`.
-
-**Calibration:** `CalibratedClassifierCV(method="isotonic")`; a raw (uncalibrated) XGB is also refit on the full data for SHAP.
-
-**Leakage check (small-n aware):** picks one holdout match, trains on the rest, and requires `holdout_AUC > CV_mean − threshold`. Threshold **scales with sample size**: `0.10` when `n < 200`, else `0.05` (`LEAKAGE_SMALL_N_CUTOFF = 200`). This is a deliberate small-sample relaxation — at n=73, any held-out fold can swing ±0.08 by chance.
-
-**Interpretation:** `shap.TreeExplainer` on the **raw** XGB (per spec §4.4). Rankings written to `shap_feature_ranking.csv` (by mean |SHAP|) and `team_shap_profile.csv` (signed mean per team). A calibration curve is saved with quantile binning (`bins = min(10, max(2, sqrt(n)))`).
-
-### What the model actually showed (honest reporting)
-- **CV ROC-AUC:** 0.538 ± 0.081 (XGB) vs **0.585 ± 0.067 (LogReg baseline)** — the tuned model **underperforms** the baseline on discrimination by ~0.047 AUC. XGB wins only on Brier (0.280 vs 0.313, a calibration-weighted score).
-- **Calibration is visibly off** — non-monotonic, zigzagging across the diagonal (small-n + near-chance discrimination).
-- **Gain vs SHAP disagree on which features matter.** XGBoost *gain* importance is dominated by game-state buckets (`sd_zero`, `min_31_45plus`, …), while mean |SHAP| is dominated by pressure geometry (`first_receiver_betweenness` #1, `defthird_pressure_density` #2, `opp_press_height` #3). This gain-vs-SHAP divergence is expected: game-state features split often on small effects; geometry features split rarely with larger effects.
-- **The honest takeaway:** at n=73, the "sophistication" isn't earning its keep yet. The model is presented as an *illustrative, small-n* exercise, not a deployable scout.
-
-**Top features by mean |SHAP|** (from `shap_feature_ranking.csv`): `first_receiver_betweenness` (0.515), `defthird_pressure_density` (0.465), `opp_press_height` (0.323), `sd_zero` (0.303), `first_receiver_pressure_seconds` (0.227), `recent_pass_reach` (0.180). The remaining 9 one-hot dummies have zero SHAP (never used in any split).
-
-**Persisted models:** `data/marts/models/buildup_failure_xgb_calibrated.joblib` (~1.57 MB, for prediction) and `buildup_failure_xgb_raw.joblib` (~328 KB, for SHAP).
-
----
-
-## 13. Data marts — every output file
-
-### CSVs (committed)
-| File | Rows | What it is |
-|---|---:|---|
-| `asa_mls_2023_baseline.csv` | 2 | MLS 2023 league reference: `xg_per_shot` (mean 0.1042, std 0.0088, n=29 teams); `rushed_shot_rate` (all NaN — not derivable from ASA). |
-| `asa_team_lookup.csv` | 0 | `team_id → team_name` lookup — header only, unpopulated (so the app never fabricates IDs). |
-| `buildup_failure_importance.csv` | 17 | Native XGBoost `feature_importances_`. Top: `sd_zero` 0.149, `first_receiver_betweenness` 0.139, `defthird_pressure_density` 0.131. 9 dummies at 0.0. |
-| `cv_metrics.csv` | 10 | Per-fold CV metrics (5 folds × 2 models `logreg_baseline`/`xgb_tuned`): `roc_auc, pr_auc, brier, n_train, n_test, n_pos_*`. |
-| `leverkusen_overlay.csv` | 7 | Module C overlay (both teams + diff + `ci_excludes_zero` + caveat). |
-| `shap_feature_ranking.csv` | 17 | Global SHAP ranking: `feature, mean_abs_shap, mean_signed_shap, rank`. |
-| `team_buildup_failure.csv` | 3 | Team failure rates. Inter Miami: 6 matches, 73 chains, 25 failures, 0.342 [0.253, 0.453]. Philly & Columbus: all-NaN, zero coverage. |
-| `team_post_regain.csv` | 6 | Inter Miami's six Module B metrics with CIs, n_regains=353. |
-| `team_shap_profile.csv` | 1 | Inter Miami's mean signed SHAP per feature (17 columns). |
-
-### Parquets
-| File | Shape | What it is |
-|---|---|---|
-| `buildup_features.parquet` | 73 × 22 | Model training matrix (features + `is_failure` + `team_name`). |
-| `regain_events.parquet` | 353 × 12 | Inter Miami regain events (source of `team_post_regain.csv`). |
-| `oof_predictions.parquet` | 73 × 5 | Out-of-fold CV predictions (`y_true, y_pred_proba, fold`). |
-| `leverkusen_2324_chains.parquet` | 2863 × 12 | Leverkusen possession chains. |
-| `leverkusen_2324_regains.parquet` | 2131 × 12 | Leverkusen regain events. |
-| `leverkusen_2324_buildup_labels.parquet` | 394 × 4 | Leverkusen failure labels (`is_failure, failure_type`). |
-
-### Models & cache
-- `data/marts/models/` — the two `.joblib` model files.
-- `data/marts/cache/` — `asa_league_bundle.json` disk snapshot for the live dashboard (gitignored; regenerated locally).
-
----
-
-## 14. Figures & the executive summary
-
-**19 PNGs in `docs/figures/`:**
-- **Case study series (for notebook 06):** `case_study_01_hook.png` (KPI tiles), `_02_pressure_exposure.png` (regain hexbin), `_03_buildup_failure_rate.png` (failure bar + CI), `_04_top_shap.png` (top-5 SHAP), `_05_post_regain_metrics.png` (6 metrics), `_06_sankey.png` (regain outcomes), `_07_summary.png` (headline tiles).
-- **Model diagnostics:** `calibration_curve.png`, `shap_summary.png` (beeswarm), `shap_dep_1/2/3.png` (dependence plots).
-- **Module B:** `post_regain_metrics_bar.png`, `post_regain_sankey.png`, `time_to_shot_hist.png`, `regain_zones_heatmap.png`.
-- **Module C:** `leverkusen_diff_forest.png` (Leverkusen−Miami forest — cyan when CI excludes zero, gray otherwise), `leverkusen_overlay_bar.png`, `leverkusen_vs_miami_regain_heatmaps.png`.
-
-> Note: Module B emits both legacy filenames (`post_regain_metrics_bar.png`) and notebook-facing `case_study_*` variants of the same underlying tables — alternate styling entry points, same data.
-
-**Executive summary** (`build_executive_summary.py` → `docs/executive_summary.pdf`): a one-page A4-landscape, matplotlib-native, recruiter-facing PDF (TrueType-embedded fonts). It renders Inter Miami's Module B metrics, the Leverkusen−Miami forest, a CI-normalized dumbbell profile overlay, a findings block, a methods block, and a footer — loading only from `data/marts/`.
-
----
-
-## 15. The Streamlit dashboard
-
-`app/streamlit_app.py` — a **3-page app** using the programmatic navigation API (`st.Page` + `st.navigation`), dark theme (base→panel→card layering, violet `#7C3AED` / cyan `#06B6D4` accents, Inter for text + JetBrains Mono for all numerals). `st.set_page_config(layout="wide")`, `inject_css()` once. Every page ends with an amber **"Associational, not causal"** caveat box.
-
-Shared components:
-- **`style.py`** — palette, injected CSS, `metric_card()`, `caveat_box()`, `pitch_plot()` (mplsoccer StatsBomb 120×80 pitch), `dense_cols()`.
-- **`asa_refresh.py`** — live ASA fetch with a **24-hour `st.cache_data` TTL**, atomic disk-snapshot fallback (`data/marts/cache/asa_league_bundle.json`), and DataFrame transforms (`merge_league_frames`, `summarize`, `goals_added_rank_table`, etc.). `resolve_league_bundle()` tries network → falls back to disk → raises only if both fail.
-- **`inter_miami_plots.py` / `leverkusen_plots.py`** — the chart builders (matplotlib + plotly).
-
-**Page 1 — Inter Miami Diagnostic** (offline; reads `team_buildup_failure.csv`, `team_post_regain.csv`, `asa_mls_2023_baseline.csv`, `regain_events.parquet`): KPI strip (matches, labeled possessions, regains, failure rate + CI), regain hexbin pitch map, six-metric post-regain bar chart with the ASA league xG/shot reference line, a regain-outcome Sankey, and a time-to-shot histogram.
-
-**Page 2 — Leverkusen Pre/Post** (offline; reads `leverkusen_overlay.csv` + optional prepost marts): KPI strip (pre/post counts, largest |Δ|, Δ direction), a forest plot (intra-Leverkusen deltas if available, else cross-case vs Miami), single-metric compare bars for raw failure rate and patience composite, and paired Leverkusen-vs-Miami overlay bars. Gracefully degrades because the true pre/post marts don't exist (22/23 absent).
-
-**Page 3 — MLS League Context** (live; hits ASA): a selectable-season league snapshot with 24h caching + offline fallback. KPI strip (teams, league xG/shot ± σ, mean points, team-games, optional xPass means), an xGoals-for-vs-against scatter with league-mean crosshairs (Inter Miami highlighting disabled because the lookup is empty), a goals-added ranking table, and three **prose-only narrative cameos** (Philadelphia Union, Columbus Crew, San Diego FC) explicitly labeled as *no statistical claims*.
-
----
-
-## 16. Notebooks
-
-All five are **read-only render notebooks** — they load persisted artifacts from `data/marts/` and `docs/figures/` and never recompute events. Every figure repeats the associational caveat.
-
-- **`03_buildup_failure_model.ipynb`** — Module A model presentation; SHAP summary from the raw XGB (per spec §4.4); documents the Philly/Columbus zero-coverage NaN rows.
-- **`04_post_regain_metrics.ipynb`** — Module B; 6 Inter Miami matches, 353 regains, six metrics with 1000-iteration match-resampled bootstrap CIs, ASA xG/shot reference line.
-- **`05_leverkusen_overlay.ipynb`** — Module C side-by-side overlay (Leverkusen cyan, Miami violet); explains why pre/post was dropped.
-- **`06_inter_miami_case_study.ipynb`** — the Inter Miami narrative case study (Messi hook; the 6 matches are the entire public MLS 2023 corpus).
-- **`07_leverkusen_analog.ipynb`** — argues why Leverkusen 23/24 is the deliberately chosen analog (not a similarity-search output) and what is/isn't recoverable under Open Data constraints.
-
----
-
-## 17. Testing
-
-A standard pytest suite (`tests/`), all **pure/deterministic unit tests over synthetic DataFrames** — no network, no data files. `tests/fixtures.py` provides `ev(**kw)` (one StatsBomb-style event with sensible defaults; team IDs `FOCAL=100`, `OPP=200`) and `frame(rows)`. Bootstrap tests are made deterministic with `seed=42`.
-
-| Test file | Covers | Sample assertions |
-|---|---|---|
-| `test_smoke.py` | Package import | `pressured_progression.__version__` is truthy. |
-| `test_possession_chain.py` | `build_possession_chains` | Single clean chain; break on new `possession_id`; break on team turnover. |
-| `test_regain.py` | `detect_regains` | Tackle→shot within 15s window; interception→loss (no shot); recovery with shot past window → None. Verifies zones. |
-| `test_post_regain.py` | `compute_regain_events`, `aggregate_team_season` | Enriched fields (final-third, loss-within-4); bootstrap aggregation (`xg_per_regain ≈ 0.05`, `time_to_shot_median == 7.0`, seed 42). |
-| `test_buildup_failure.py` | `label_buildup_failures` | One test per failure type, plus happy path + two non-qualifying cases (origin past halfway; no pressure). Coordinates are hand-tuned to isolate each failure type's precedence. |
-| `test_buildup_features.py` | `extract_buildup_features`, `FEATURE_COLUMNS` | All features computed; `recent_pass_reach == 10.0`; own-goal score crediting; `support_density_ff` absent; empty-chains → empty. |
-| `test_asa_refresh.py` | App-layer ASA transforms | `goals_added_totals_df` sums across actions (13.75 / 7.5); `goals_added_rank_table` orders descending. (Manipulates `sys.path` to import `app/components`.) |
-
-`tests/__init__.py` is empty (just makes `tests` importable for `from tests.fixtures import ...`).
-
-The suite effectively encodes the project's domain thresholds as executable specs: own-half x<40, long-ball >40m, backward delta <−5, 10s/15s windows, rushed xG<0.05 within 8s, and the minute/score-diff buckets.
-
----
-
-## 18. CI, linting & pre-commit
-
-**CI** (`.github/workflows/ci.yml`) — a single `lint-and-test` job on `ubuntu-latest`, triggered on every `push` and `pull_request`:
-1. `actions/checkout@v4`
-2. `actions/setup-python@v5` — **Python 3.11 only** (no matrix), pip-cached.
-3. `pip install -e ".[dev]"`
-4. `ruff check .` (lint)
-5. `ruff format --check .` (formatting, non-mutating)
-6. `pytest`
-
-**Pre-commit** (`.pre-commit-config.yaml`) — `astral-sh/ruff-pre-commit` v0.6.9: `ruff --fix` + `ruff-format` (both auto-mutate locally). Note the asymmetry: local hooks fix, CI only checks — so a commit that bypasses hooks will fail CI.
-
-**Ruff config** (in `pyproject.toml`): line-length 100, target py311, lint rules `E, F, W, I, UP, B, SIM`, double-quote format.
-
-**`.gitignore`** excludes the usual Python/venv/cache/IDE/OS artifacts, secrets (`.env*`, keeps `.env.example`), and — importantly — the reproducible/large data: `data/raw/**` and `data/core/**` (each keeps a `.gitkeep`), `*.duckdb*`, and `data/marts/cache/*.json`. `data/marts/` itself is committed.
-
----
-
-## 19. How to reproduce everything
-
-Requires **Python 3.11+**.
-
-```bash
-# 1. clone & enter
-git clone https://github.com/pressured-progression/pressured-progression.git
-cd pressured-progression
-
-# 2. virtual environment
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-source .venv/bin/activate      # macOS/Linux
-
-# 3. install (editable, with dev extras) + hooks
-pip install -e ".[dev]"
-pre-commit install
-
-# 4. run the ingest + analysis pipeline (in order)
-python -m pressured_progression.ingest.statsbomb
-python -m pressured_progression.ingest.asa
-python -m pressured_progression.ingest.asa_league_baseline
-python -m pressured_progression.ingest.leverkusen_ingest
-python -m pressured_progression.analysis.smoke_buildup_failure
-python -m pressured_progression.analysis.run_buildup_pipeline
-python -m pressured_progression.features.post_regain
-python -m pressured_progression.analysis.leverkusen_overlay
-python -m pressured_progression.analysis.build_case_study_figures
-python -m pressured_progression.analysis.build_executive_summary
-
-# 5. launch the dashboard
-streamlit run app/streamlit_app.py
-
-# 6. run the tests
-pytest
+```
+src/pressured_progression/
+  core/       schemas.py                     # Pydantic column contracts
+  ingest/     statsbomb.py, asa.py,          # Open Data catalog audit, ASA API
+              asa_league_baseline.py,        # MLS 2023 xG/shot baseline
+              leverkusen_ingest.py,          # Leverkusen 23/24 events → parquet
+              events_adapter.py, fbref.py    # statsbombpy → EventRow; FBref (blocked)
+  sequences/  possession_chain.py, regain.py
+  features/   buildup_features.py,           # Module A feature matrix
+              post_regain.py                 # Module B metrics + figures
+  labeling/   buildup_failure.py            # binary label + failure_type
+  models/     buildup_failure_xgb.py         # XGBoost + LogReg baseline + calibration
+  analysis/   smoke_buildup_failure.py,      # Module A smoke run
+              run_buildup_pipeline.py,       # full Module A driver
+              leverkusen_overlay.py,         # Module C
+              build_case_study_figures.py,   # 7 case-study PNGs
+              build_executive_summary.py     # one-page PDF
+app/          streamlit_app.py + components/ + pages/   # 3-page dashboard
+data/         raw/ (gitignored) · core/ (gitignored) · marts/ (committed)
+docs/         project_spec.md, data_reality.md, article_draft.md, figures/, executive_summary.pdf
+notebooks/    03–07 render notebooks
+tests/        8 test files + fixtures
 ```
 
-The committed `data/marts/` means you can run the notebooks, dashboard, and figure/PDF builders **without** re-fetching raw data. The ingest steps are only needed to rebuild `data/raw` and `data/core` from scratch.
+Event-level scans ride on **DuckDB** (`read_parquet` unions per-match files), not pandas, keeping full-season aggregation off memory. Ingestion is idempotent, and the bootstrap seed `20260421` with match-level resampling is used consistently for reproducibility.
 
 ---
 
-## 20. Tech stack
+## Tech stack
 
-- **Language:** Python 3.11+
-- **Data:** pandas, NumPy, **DuckDB** (event-level scans/unions), pyarrow (parquet)
-- **Ingestion:** `statsbombpy`, `requests`, BeautifulSoup4 + lxml (FBref), Pydantic (schemas)
-- **ML:** scikit-learn, XGBoost, SHAP, scipy, networkx (passing-network betweenness)
-- **Viz:** matplotlib, mplsoccer, Plotly (+ kaleido for Sankey export), joblib (model persistence)
-- **App:** Streamlit (multi-page `st.navigation`)
-- **Tooling:** Ruff (lint + format), pytest, pre-commit, ipykernel
-- **CI:** GitHub Actions
+The full toolchain (badges are shown in the header at the top):
+
+| Layer | Tools | Role |
+|---|---|---|
+| **Language & runtime** | Python 3.11+ | Whole project; `requires-python >= 3.11`. |
+| **Data & storage** | pandas, NumPy, **DuckDB**, pyarrow (parquet), Pydantic | Event wrangling, off-memory season aggregation, typed column contracts. |
+| **Ingestion** | `statsbombpy`, `requests`, BeautifulSoup4 + lxml | StatsBomb Open Data, ASA REST API, FBref (blocked). |
+| **Modeling & stats** | scikit-learn, **XGBoost**, **SHAP**, SciPy, NetworkX, joblib | GroupKFold CV, gradient-boosted classifier, feature attribution, bootstrap CIs, passing-network betweenness, model persistence. |
+| **Visualization** | matplotlib, **mplsoccer**, **Plotly** (+ kaleido) | Pitch plots, bootstrap-CI bars/forests, Sankeys, PDF export. |
+| **App** | **Streamlit** (multi-page `st.navigation`) | Interactive 3-page dashboard with live ASA data. |
+| **Dev tooling** | Ruff (lint + format), pytest, pre-commit, ipykernel | Quality gates and notebook kernels. |
+| **CI/CD** | GitHub Actions | Ruff + pytest on a Python 3.11 / 3.12 matrix. |
 
 ---
 
-## 21. Constants & thresholds cheat-sheet
+## Data marts (outputs)
 
-| Constant | Value | Where | Meaning |
+Committed, analysis-ready outputs in `data/marts/`:
+
+| File | What it is |
+|---|---|
+| `team_buildup_failure.csv` | Per-team failure rates + CIs (Inter Miami measured; Philly/Columbus NaN, zero coverage). |
+| `team_post_regain.csv` | Inter Miami's six Module B metrics with CIs (n=353). |
+| `leverkusen_overlay.csv` | Module C overlay: both teams + difference + `ci_excludes_zero`. |
+| `buildup_features.parquet` | Model training matrix (73 × 22). |
+| `regain_events.parquet` | Inter Miami regain events (353 × 12). |
+| `oof_predictions.parquet` | Out-of-fold CV predictions (73 × 5). |
+| `leverkusen_2324_*.parquet` | Leverkusen chains (2863), regains (2131), labels (394). |
+| `cv_metrics.csv` | Per-fold CV metrics for baseline + XGB. |
+| `buildup_failure_importance.csv` / `shap_feature_ranking.csv` / `team_shap_profile.csv` | Model importance + SHAP rankings. |
+| `asa_mls_2023_baseline.csv` | MLS 2023 league xG/shot reference. |
+| `models/*.joblib` | Persisted calibrated + raw XGBoost models. |
+
+19 figures live in `docs/figures/`; the one-page recruiter summary is [`docs/executive_summary.pdf`](docs/executive_summary.pdf).
+
+---
+
+## The Streamlit dashboard
+
+A dark-themed **3-page** app (`st.Page` / `st.navigation`), launched with `streamlit run app/streamlit_app.py`. Every page ends with an amber "associational, not causal" caveat.
+
+- **Page 1 — Inter Miami Diagnostic** (offline): KPI strip, regain hexbin pitch map, six-metric post-regain bar chart with the ASA league reference line, regain-outcome Sankey, time-to-shot histogram.
+- **Page 2 — Leverkusen Pre/Post** (offline): pre/post KPIs, a delta forest plot (falls back to the cross-case overlay because 22/23 is unavailable), single-metric compare bars, and paired Leverkusen-vs-Miami bars.
+- **Page 3 — MLS League Context** (live): a selectable-season ASA snapshot with a **24-hour cache and offline JSON fallback** — league KPIs, an xGoals scatter with league-mean crosshairs, a goals-added ranking table, and three prose-only narrative cameos.
+
+---
+
+## Testing
+
+A deterministic pytest suite (`tests/`) over **synthetic DataFrames** — no network, no data files. `tests/fixtures.py` builds StatsBomb-style events; bootstrap tests fix `seed=42`. Coverage: possession-chain construction, regain detection + windows, post-regain enrichment + aggregation, every build-up failure type, feature extraction (including own-goal score crediting and the dropped `support_density_ff`), and the app-layer ASA transforms. The tests double as executable specs for the project's domain thresholds. Run the whole suite with `pytest`.
+
+---
+
+## Notebooks
+
+Five read-only render notebooks that load the committed marts and figures (no recompute needed):
+
+| Notebook | Contents |
+|---|---|
+| `notebooks/03_buildup_failure_model.ipynb` | Module A: the build-up failure model, feature importance, and SHAP summary. |
+| `notebooks/04_post_regain_metrics.ipynb` | Module B: 353 Inter Miami regains, six metrics with match-resampled bootstrap CIs. |
+| `notebooks/05_leverkusen_overlay.ipynb` | Module C: the Leverkusen 23/24 × Inter Miami 2023 side-by-side overlay. |
+| `notebooks/06_inter_miami_case_study.ipynb` | The Inter Miami narrative case study (Messi-era hook, pressure-exposure profile). |
+| `notebooks/07_leverkusen_analog.ipynb` | Why Leverkusen 23/24 is the deliberately chosen European analog. |
+
+---
+
+## Reproduce
+
+Requires Python **3.11+**. The `data/marts/` outputs are committed, so you can explore the dashboard, notebooks, figures, and PDF **without re-fetching a single byte of raw data**.
+
+### 1. Setup
+
+```bash
+# from the repository root
+cd pressured-progression
+
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate        # macOS/Linux
+
+pip install -e ".[dev]"
+pre-commit install
+```
+
+### 2. Quick start (uses the committed marts)
+
+```bash
+streamlit run app/streamlit_app.py     # interactive 3-page dashboard
+pytest                                 # full test suite
+```
+
+The notebooks (`notebooks/03`–`07`) and the figure/PDF builders (`build_case_study_figures`, `build_executive_summary`) also run directly against the committed marts.
+
+### 3. Full rebuild from raw data
+
+```bash
+python -m pressured_progression.ingest.statsbomb            # Open Data catalog audit
+python -m pressured_progression.ingest.asa                  # ASA API audit
+python -m pressured_progression.ingest.asa_league_baseline  # MLS 2023 xG/shot baseline
+python -m pressured_progression.ingest.leverkusen_ingest    # Leverkusen 23/24 events
+python -m pressured_progression.analysis.smoke_buildup_failure   # Module A labels
+python -m pressured_progression.analysis.run_buildup_pipeline    # Module A model + SHAP
+python -m pressured_progression.features.post_regain             # Module B metrics
+python -m pressured_progression.analysis.leverkusen_overlay      # Module C overlay
+python -m pressured_progression.analysis.build_case_study_figures  # 7 case-study PNGs
+python -m pressured_progression.analysis.build_executive_summary   # one-page PDF
+```
+
+The ingest steps rebuild `data/raw` and `data/core` from StatsBomb Open Data and the ASA API; everything downstream regenerates the marts and figures.
+
+**Further reading:** the project spec ([`docs/project_spec.md`](docs/project_spec.md)), the coverage audit ([`docs/data_reality.md`](docs/data_reality.md)), and the full written analysis ([`docs/article_draft.md`](docs/article_draft.md)).
+
+---
+
+## Data sources
+
+| Source | Use | Access | Status |
 |---|---|---|---|
-| Defensive-third origin | `start_x < 40` | labeling / regain | Own-third boundary (0–120 pitch) |
-| Final-third boundary | `x ≥ 80` | post_regain | `FINAL_THIRD_X` |
-| Pressure window (qualify) | first 3 actions | labeling | Opponent pressure must appear early |
-| Long ball | `> 40 m` | labeling | `LONG_BALL_METERS` |
-| Backward reset | `pass_end_x < location_x − 5` | labeling | `BACKWARD_X_DELTA` |
-| Turnover x-cap | `< 60` | labeling | `TURNOVER_X_MAX` |
-| Opp-shot window | `10 s` | labeling | `OPP_SHOT_WINDOW_S` |
-| Regain shot window | `15 s` | regain | `SHOT_WINDOW_S` |
-| Rushed shot | xG `< 0.05` **and** `< 8 s` | post_regain | `RUSHED_XG_MAX`, `RUSHED_SECONDS_MAX` |
-| Loss-within | `≤ 4 actions` + turnover | post_regain | `LOST_WITHIN_ACTIONS` |
-| Pressure density window | `30 s` | features | `PRESS_DENSITY_WINDOW_S` |
-| First-receiver pressure (binary) | `≤ 2 s` | features | `FR_PRESSURE_BINARY_S` |
-| Bootstrap iterations | `1000` (2000 in smoke) | multiple | Match-resampled |
-| Bootstrap seed | `20260421` | multiple | Reproducibility |
-| Leakage threshold | `0.10` if n<200 else `0.05` | model | Small-n relaxation |
-| CV | `GroupKFold(5)` by `match_id` | model | No match leakage |
-| Zones (x) | `<40` def, `40–80` mid, `≥80` att | regain | `_zone_for_x` |
+| [StatsBomb Open Data](https://github.com/statsbomb/open-data) | Event-level data (MLS 2023 Inter Miami; Bundesliga 2023/24 Leverkusen) | `statsbombpy` | Used |
+| [American Soccer Analysis v1 API](https://app.americansocceranalysis.com/api/v1/) | MLS 2020–present team-season aggregates | REST | Used |
+| [FBref](https://fbref.com/) | Intended style-vector features | HTTP + BS4 | Cloudflare-blocked (403) |
 
 ---
 
-## 22. Known limitations, tech debt & caveats
+## Scope and limitations
 
-**Hard scope limits (data reality):**
-- **Not a full-MLS study.** Only Inter Miami has MLS 2023 event data (6 matches). No league-wide distribution exists.
-- **The two spec-named case teams (Philly, Columbus) are unmeasurable** at event level — zero Open Data coverage.
-- **Small n.** 73 qualifying chains; several cross-team differences are swallowed by bootstrap bands.
-- **Cross-league confound.** Bundesliga vs MLS differences may reflect competition environment as much as team habit.
-- **No causal claims.** Everything is associational. Nothing attributes results to Alonso, Messi, or any tactic.
-- **360 data 404s** → `support_density_ff` dropped.
-- **FBref blocked** → the 8-dim style vector and the analog-matching engine (`matching/`) were never built.
-- **Sample asymmetry** — 34 Leverkusen matches vs 6 Miami matches.
-
-**Model humility:**
-- Tuned XGBoost (0.538 AUC) underperforms a LogReg baseline (0.585); calibration zigzags. Scores are **not** deployable as scouting verdicts.
-- The leakage check *fails* at the strict 0.05 threshold even with no real leakage — which is exactly why the threshold scales to 0.10 at small n.
-
-**Tech debt noted in `project_info.md`:**
-- Score-diff computation originally handled only `Shot=="Goal"` (missed own goals) — the features module now credits `Own Goal For` too.
-- `support_density_ff` is dead weight until 360 JSONs land — kept out of the feature set.
-- Duplicate figure paths (`post_regain_*` vs `case_study_*`) render the same tables via different styling entry points.
+This is **not** a full-MLS study. Only Inter Miami has event-level MLS 2023 data (the 6-match Messi release); every other MLS team has zero Open Data matches that season, so the original Philadelphia/Columbus case-study pair cannot be measured. The European analog was reduced to a single season (Leverkusen 2023/24) after the audit found Bundesliga 2022/23 absent, which killed the planned pre/post comparison. League context (2020–present) comes from ASA as team-season aggregates. Every reported metric is **associational** — no causal attribution to any coach, player, or philosophy is supported. Sample sizes are small (73 chains; 6 vs 34 matches), so several cross-team differences are swallowed by their bootstrap bands, and the model's discrimination sits near chance. See [`docs/data_reality.md`](docs/data_reality.md) for the full audit and every caveat.
 
 ---
 
-## 23. Glossary
+## Conclusion
 
-- **Possession chain** — consecutive on-ball events owned by one team within a StatsBomb possession block.
-- **Regain** — a defensive action (interception/tackle/recovery/duel/block) that flips possession to the focal team.
-- **Build-up failure** — a qualifying defensive-third-origin, pressured chain that ends in one of four failure modes.
-- **xG** — expected goals; the modeled scoring probability of a shot (StatsBomb `shot_statsbomb_xg`).
-- **Bootstrap CI** — an uncertainty band built by resampling **matches** with replacement (not individual events), so the interval reflects match-to-match variability.
-- **SHAP** — additive per-feature contributions explaining a model prediction; here summarized as global mean |SHAP| rankings.
-- **Patience composite** — `z(xg_per_regain) − z(rushed_shot_rate)`; higher = more patient, higher-quality post-regain attacking.
-- **Associational** — describes co-occurrence in the data; explicitly **not** a causal claim.
-- **360 / freeze-frame** — StatsBomb's tracking snapshot at each event (positions of all visible players). Advertised-but-404 for MLS 2023 here.
+I set out to rank MLS teams' build-up and transition failures against European exemplars. The first hard result was that **the study I planned could not be run on open data** — the two teams I named had zero event-level coverage, three of four European analogs were missing, and the tracking layer I needed either 404'd or sat behind a Cloudflare wall. That audit is not a footnote; it is the project's first genuine finding, and it forced a reframe from "rank the league" to "**describe, honestly, what the available data can actually support**."
+
+Within that reframed, data-honest scope, the numbers tell a clear and defensible story:
+
+- **Inter Miami 2023 was brittle under pressure** — it failed roughly **one in three** qualifying build-ups when pressed in its own half (34% [25–45%]) and turned **~90%** of its regains into nothing inside a 15-second window.
+- **Leverkusen 2023/24 was measurably better** on the metrics where the data can tell them apart — lower build-up failure rate, higher final-third entry, more xG per regain, and a better patience composite (4 of 7 metrics separable at 95% confidence). On the other three, I say plainly that the sample can't distinguish them.
+- **The fancy model did not beat the simple one.** A tuned XGBoost landed near coin-flip discrimination and lost to a logistic-regression baseline at n=73 — so I report it as an illustrative, small-n exercise rather than dressing it up as a predictor.
+
+The takeaway I stand behind: **the value of this project is disciplined description under known data limits** — a reproducible pipeline, an explicit label set, uncertainty on every bar, and comparisons anchored strictly to what open data actually stores. It profiles pressure-related patterns and states, out loud, everything it cannot conclude: no causal claims, no league-wide ranking, no coaching prescription. Quantify what can be measured, name what cannot, and keep every assumption visible.
 
 ---
 
-## 24. Author & license
+## Author + contact
 
-- **Author:** Ahmed Ali — `ahmedkali841@gmail.com`
-- **Repository:** `https://github.com/AhmedKamal-41/-mls-pressured-progression`
-- **License:** MIT (see `LICENSE`)
-- **Related docs:** `README.md`, `docs/project_spec.md` (the working contract), `docs/data_reality.md` (coverage audit), `docs/article_draft.md` (long-form writeup), `project_info.md` (Phase-3 calibration snapshot), `docs/executive_summary.pdf` (one-pager).
+- **Author:** Ahmed Kali — `ahmedkali841@gmail.com`
+- **Written analysis:** [`docs/article_draft.md`](docs/article_draft.md)
+- **One-page summary:** [`docs/executive_summary.pdf`](docs/executive_summary.pdf)
 
-> **One sentence worth the scroll:** the value here is *disciplined description under known data limits* — a named label set, reproducible pipelines, uncertainty on every bar, and a Leverkusen overlay anchored in what open data actually stores — not a playbook imported from anyone.
+Licensed under the [MIT License](LICENSE).
