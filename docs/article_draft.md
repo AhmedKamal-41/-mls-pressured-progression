@@ -136,7 +136,7 @@ Second, **cross-league strength**: Bundesliga pace and MLS spacing differ; overl
 
 Third, **observation, not intervention**: Metrics catalogue what co-occurred on released tapes—nothing identifies counterfactual Miami tactics or proves what Leverkusen would lose if dropped into MLS tomorrow.
 
-Fourth, **360 availability mismatch**: StatsBomb catalogs advertise freeze-frame availability for Miami matches, yet GitHub-hosted freeze-frame JSON returned HTTP 404 during audit (`docs/data_reality.md`), leaving planned support-density features empty—SHAP rankings highlight **support_density_ff** at zero contribution while geometric pressure proxies carry signal (`project_info.md`).
+Fourth, **360 availability mismatch**: StatsBomb catalogs advertise freeze-frame availability for Miami matches, yet GitHub-hosted freeze-frame JSON returned HTTP 404 during audit (`docs/data_reality.md`), leaving planned support-density features empty—SHAP rankings highlight **support_density_ff** at zero contribution while geometric pressure proxies carry signal (`data/marts/shap_feature_ranking.csv`).
 
 Fifth, modeling humility: tuned XGBoost sits near baseline discrimination (`data/marts/cv_metrics.csv`); calibration error visible in **`docs/figures/calibration_curve.png`** counsels against deploying scores as scouting verdicts.
 
@@ -158,6 +158,6 @@ One sentence worth the scroll: **the value is disciplined description under know
 
 **(a) Prescriptive language scrub:** Verified removal of imperative coaching advice; Leverkusen framed as comparative benchmark only.
 
-**(b) Numeric anchoring:** Miami failure rate, bootstrap intervals, regain counts, Module B estimates, overlay differences, CV means, Sankey-derived no-shot percentage, and absence statements for Philly/Columbus tie to `data/marts/*.csv`, `docs/figures/*`, or explicit audit docs (`docs/data_reality.md`, `project_info.md`). Guardian / Inquirer / Backheeled / CIES linked where narrative claims appear.
+**(b) Numeric anchoring:** Miami failure rate, bootstrap intervals, regain counts, Module B estimates, overlay differences, CV means, Sankey-derived no-shot percentage, and absence statements for Philly/Columbus tie to `data/marts/*.csv`, `docs/figures/*`, or the explicit audit doc (`docs/data_reality.md`). Guardian / Inquirer / Backheeled / CIES linked where narrative claims appear.
 
 **(c) Recruiter readability pass:** Specialist terms introduced once (SHAP as additive contribution; bootstrap as match-resampled uncertainty); causal verbs avoided throughout.
