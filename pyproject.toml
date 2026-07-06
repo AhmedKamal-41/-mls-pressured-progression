@@ -42,6 +42,9 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Jupyter notebooks are exploratory, read-only render artifacts (prose + long
+# figure/table cells); don't hold them to the source line-length/style rules.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
